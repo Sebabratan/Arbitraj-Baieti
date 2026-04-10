@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Judge Panel</title>
+    <style>
+        body {
+            background: black;
+            color: white;
+            font-family: Arial;
+            text-align: center;
+        }
+
+        input, button {
+            font-size: 25px;
+            padding: 10px;
+            margin: 10px;
+        }
+
+        button {
+            background: gold;
+        }
+    </style>
+</head>
+
+<body>
+
+<h1>👨‍⚖️ Judge {{judge}}</h1>
+
+<h2>{{athlete[1]}} ({{athlete[2]}})</h2>
+
+<form method="POST" action="/submit">
+
+    <input type="hidden" name="athlete_id" value="{{athlete[0]}}">
+    <input type="hidden" name="judge" value="{{judge}}">
+
+    <input name="d" placeholder="D Score" required>
+    <input name="e" placeholder="E Score" required>
+    <input name="penalty" placeholder="Penalty" value="0">
+
+    <br>
+
+    <button type="submit">SUBMIT</button>
+</form>
+
+</body>
+</html>

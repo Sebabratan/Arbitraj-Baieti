@@ -3,10 +3,10 @@ import sqlite3
 
 app = Flask(__name__)
 
-conn = sqlite3.connect("world_champ.db", check_same_thread=False)
+conn = sqlite3.connect("gym.db", check_same_thread=False)
 cur = conn.cursor()
 
-# ================= TABLES =================
+# ================= DB =================
 
 cur.execute("""
 CREATE TABLE IF NOT EXISTS athletes (
@@ -17,9 +17,10 @@ CREATE TABLE IF NOT EXISTS athletes (
 """)
 
 cur.execute("""
-CREATE TABLE IF NOT EXISTS performances (
+CREATE TABLE IF NOT EXISTS scores (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     athlete_id INTEGER,
+    judge TEXT,
     d_score REAL,
     e_score REAL,
     penalty REAL
@@ -28,14 +29,12 @@ CREATE TABLE IF NOT EXISTS performances (
 
 conn.commit()
 
-# ================= HOME =================
+# ================= ADMIN =================
 
 @app.route("/")
 def index():
     athletes = cur.execute("SELECT * FROM athletes").fetchall()
     return render_template("index.html", athletes=athletes)
-
-# ================= ADD ATHLETE =================
 
 @app.route("/add", methods=["POST"])
 def add():
@@ -46,42 +45,29 @@ def add():
     conn.commit()
     return redirect("/")
 
-# ================= JUDGING =================
+# ================= JUDGE PAGE (SEPARAT) =================
 
-@app.route("/judge", methods=["POST"])
-def judge():
+@app.route("/judge/<judge_id>/<athlete_id>")
+def judge_page(judge_id, athlete_id):
+    athlete = cur.execute("SELECT * FROM athletes WHERE id=?", (athlete_id,)).fetchone()
+    return render_template("judge.html", judge=judge_id, athlete=athlete)
+
+# ================= SUBMIT SCORE =================
+
+@app.route("/submit", methods=["POST"])
+def submit():
     athlete_id = request.form["athlete_id"]
+    judge = request.form["judge"]
     d = float(request.form["d"])
+    e = float(request.form["e"])
     penalty = float(request.form["penalty"])
 
-    # 7 E-scores
-    e_scores = []
-    for i in range(1, 8):
-        val = request.form.get(f"e{i}")
-        if val != "" and val is not None:
-            e_scores.append(float(val))
-
-    # safety
-    if len(e_scores) < 3:
-        return redirect("/")
-
-    # ================= FIG RULE =================
-    e_scores.sort()
-
-    # ❌ eliminăm 2 mici + 2 mari
-    trimmed = e_scores[2:-2]
-
-    e_final = sum(trimmed) / len(trimmed)
-
-    total = d + e_final - penalty
-
     cur.execute("""
-        INSERT INTO performances VALUES (NULL,?,?,?,?)
-    """, (athlete_id, d, e_final, penalty))
+        INSERT INTO scores VALUES (NULL,?,?,?,?,?)
+    """, (athlete_id, judge, d, e, penalty))
 
     conn.commit()
-
-    return redirect("/")
+    return redirect("/judge/" + judge + "/" + athlete_id)
 
 # ================= LIVE RANKING =================
 
@@ -92,11 +78,11 @@ def rankings():
         SELECT 
             a.name,
             a.club,
-            p.d_score,
-            p.e_score,
-            p.penalty
+            AVG(s.d_score),
+            AVG(s.e_score),
+            SUM(s.penalty)
         FROM athletes a
-        LEFT JOIN performances p ON a.id = p.athlete_id
+        LEFT JOIN scores s ON a.id = s.athlete_id
         GROUP BY a.id
     """).fetchall()
 
@@ -113,7 +99,7 @@ def rankings():
 
         result.append([name, club, total, e, d])
 
-    # 🏆 TIEBREAK: E → D → egal
+    # 🏆 FIG TIEBREAK: E → D → egal
     result.sort(key=lambda x: (x[3], x[4]), reverse=True)
 
     return jsonify(result)
