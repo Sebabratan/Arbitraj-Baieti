@@ -1,110 +1,194 @@
-from flask import Flask, render_template, request, redirect, jsonify
-import sqlite3
+from flask import Flask, render_template, request, redirect, session
+from flask_socketio import SocketIO
+from flask_login import LoginManager, login_user, login_required, logout_user, current_user
+from werkzeug.security import generate_password_hash, check_password_hash
+
+from models import db, User, Routine
 
 app = Flask(__name__)
+app.config['SECRET_KEY'] = "SUPER_SECRET_KEY"
+app.config['SQLALCHEMY_DATABASE_URI'] = "sqlite:///gym.db"
 
-conn = sqlite3.connect("gym.db", check_same_thread=False)
-cur = conn.cursor()
+db.init_app(app)
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
-# ================= DB =================
+login_manager = LoginManager()
+login_manager.init_app(app)
 
-cur.execute("""
-CREATE TABLE IF NOT EXISTS athletes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT,
-    club TEXT
-)
-""")
 
-cur.execute("""
-CREATE TABLE IF NOT EXISTS scores (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    athlete_id INTEGER,
-    judge TEXT,
-    d_score REAL,
-    e_score REAL,
-    penalty REAL
-)
-""")
+# =====================
+# INIT DB
+# =====================
+with app.app_context():
+    db.create_all()
 
-conn.commit()
 
-# ================= ADMIN =================
+# =====================
+# LOGIN SYSTEM
+# =====================
+@login_manager.user_loader
+def load_user(user_id):
+    return User.query.get(int(user_id))
 
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        user = User.query.filter_by(username=request.form["username"]).first()
+
+        if user and check_password_hash(user.password, request.form["password"]):
+            login_user(user)
+            session["role"] = user.role
+            return redirect("/judge")
+
+    return render_template("login.html")
+
+
+# =====================
+# DASHBOARD
+# =====================
 @app.route("/")
-def index():
-    athletes = cur.execute("SELECT * FROM athletes").fetchall()
-    return render_template("index.html", athletes=athletes)
+def dashboard():
+    return render_template("dashboard.html")
 
-@app.route("/add", methods=["POST"])
-def add():
-    name = request.form["name"]
-    club = request.form["club"]
 
-    cur.execute("INSERT INTO athletes VALUES (NULL,?,?)", (name, club))
-    conn.commit()
-    return redirect("/")
+# =====================
+# JUDGE PANEL
+# =====================
+@app.route("/judge")
+@login_required
+def judge():
+    return render_template("judge.html", role=current_user.role)
 
-# ================= JUDGE PAGE (SEPARAT) =================
 
-@app.route("/judge/<judge_id>/<athlete_id>")
-def judge_page(judge_id, athlete_id):
-    athlete = cur.execute("SELECT * FROM athletes WHERE id=?", (athlete_id,)).fetchone()
-    return render_template("judge.html", judge=judge_id, athlete=athlete)
+# =====================
+# CONTROL ROOM
+# =====================
+@app.route("/control")
+@login_required
+def control():
+    if current_user.role != "ADMIN":
+        return "Forbidden"
 
-# ================= SUBMIT SCORE =================
+    pending = Routine.query.filter_by(status="PENDING").all()
+    return render_template("control_room.html", routines=pending)
+
+
+# =====================
+# TV WALL
+# =====================
+@app.route("/tv")
+def tv():
+    return render_template("tv_wall.html")
+
+
+# =====================
+# FIG CALCULATION
+# =====================
+def calc_final(D, e_list, penalty):
+    e_list.sort()
+    middle = e_list[1:4]
+    E_avg = sum(middle) / 3
+    return D + E_avg - penalty
+
+
+# =====================
+# SUBMIT SCORE (ANTI CHEAT)
+# =====================
+submitted_users = set()
 
 @app.route("/submit", methods=["POST"])
+@login_required
 def submit():
-    athlete_id = request.form["athlete_id"]
-    judge = request.form["judge"]
-    d = float(request.form["d"])
-    e = float(request.form["e"])
-    penalty = float(request.form["penalty"])
+    if current_user.username in submitted_users:
+        return {"error": "Already submitted"}, 403
 
-    cur.execute("""
-        INSERT INTO scores VALUES (NULL,?,?,?,?,?)
-    """, (athlete_id, judge, d, e, penalty))
+    data = request.json
 
-    conn.commit()
-    return redirect("/judge/" + judge + "/" + athlete_id)
+    e_list = [
+        float(data["E1"]),
+        float(data["E2"]),
+        float(data["E3"]),
+        float(data["E4"]),
+        float(data["E5"])
+    ]
 
-# ================= LIVE RANKING =================
+    final = calc_final(float(data["D"]), e_list, float(data["penalty"]))
 
-@app.route("/api/rankings")
-def rankings():
+    routine = Routine(
+        nume=data["nume"],
+        club=data["club"],
+        aparat=data["aparat"],
+        D=float(data["D"]),
+        E1=e_list[0],
+        E2=e_list[1],
+        E3=e_list[2],
+        E4=e_list[3],
+        E5=e_list[4],
+        penalty=float(data["penalty"]),
+        final=final,
+        status="PENDING"
+    )
 
-    data = cur.execute("""
-        SELECT 
-            a.name,
-            a.club,
-            AVG(s.d_score),
-            AVG(s.e_score),
-            SUM(s.penalty)
-        FROM athletes a
-        LEFT JOIN scores s ON a.id = s.athlete_id
-        GROUP BY a.id
-    """).fetchall()
+    db.session.add(routine)
+    db.session.commit()
 
-    result = []
+    submitted_users.add(current_user.username)
 
-    for r in data:
-        name, club, d, e, pen = r
+    return {"status": "PENDING"}
 
-        d = d or 0
-        e = e or 0
-        pen = pen or 0
 
-        total = d + e - pen
+# =====================
+# APPROVAL SYSTEM
+# =====================
+@app.route("/approve/<int:id>")
+@login_required
+def approve(id):
+    if current_user.role != "ADMIN":
+        return "Forbidden"
 
-        result.append([name, club, total, e, d])
+    r = Routine.query.get(id)
+    r.status = "APPROVED"
+    db.session.commit()
 
-    # 🏆 FIG TIEBREAK: E → D → egal
-    result.sort(key=lambda x: (x[3], x[4]), reverse=True)
+    update_board()
 
-    return jsonify(result)
+    return redirect("/control")
 
-# ================= RUN =================
 
+# =====================
+# LIVE SCOREBOARD UPDATE
+# =====================
+def update_board():
+    approved = Routine.query.filter_by(status="APPROVED").all()
+
+    data = [{
+        "nume": r.nume,
+        "club": r.club,
+        "final": r.final
+    } for r in approved]
+
+    data.sort(key=lambda x: -x["final"])
+
+    socketio.emit("update", data)
+
+
+# =====================
+# RESET ROUND
+# =====================
+@app.route("/reset")
+def reset():
+    global submitted_users
+    submitted_users = set()
+
+    Routine.query.delete()
+    db.session.commit()
+
+    return {"reset": True}
+
+
+# =====================
+# RUN
+# =====================
 if __name__ == "__main__":
-    app.run()
+    socketio.run(app, host="0.0.0.0", port=5000, debug=True, allow_unsafe_werkzeug=True)
