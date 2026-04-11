@@ -1,0 +1,6 @@
+Flask
+Flask-SQLAlchemy
+Flask-SocketIO
+Flask-Login
+werkzeug
+gunicorn

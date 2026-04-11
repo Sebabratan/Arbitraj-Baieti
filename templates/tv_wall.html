@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html>
+<head>
+<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+
+<style>
+body {
+    background:black;
+    color:white;
+    text-align:center;
+    font-family:Arial;
+}
+
+h1 { color:gold; font-size:60px; }
+
+table { width:100%; font-size:50px; }
+
+.gold { color:gold; }
+.silver { color:silver; }
+.bronze { color:#cd7f32; }
+</style>
+</head>
+
+<body>
+
+<h1>🏆 TV WALL</h1>
+
+<table>
+<tbody id="board"></tbody>
+</table>
+
+<script>
+let socket = io();
+
+socket.on("update", data => {
+    let html = "";
+
+    data.forEach((x,i)=>{
+
+        let c=""
+        if(i==0) c="gold"
+        if(i==1) c="silver"
+        if(i==2) c="bronze"
+
+        html += `
+        <tr class="${c}">
+            <td>${i+1}</td>
+            <td>${x.nume}</td>
+            <td>${x.club}</td>
+            <td>${x.final.toFixed(3)}</td>
+        </tr>`;
+    });
+
+    document.getElementById("board").innerHTML = html;
+});
+</script>
+
+</body>
+</html>
